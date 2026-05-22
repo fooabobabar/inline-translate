@@ -278,7 +278,7 @@ lines get wrapped. This preserves markdown lists and structured text."
   :group 'inline-translate)
 
 (defcustom inline-translate-collapse-line-breaks-modes
-  '(Man-mode woman-mode Info-mode help-mode)
+  '(Man-mode woman-mode Info-mode help-mode, fundamental-mode)
   "Major modes where the source uses arbitrary line wrapping.
 In these modes, intra-paragraph line breaks in the translation are
 collapsed and the text is re-wrapped to fit the overlay width.
@@ -338,12 +338,24 @@ The target language is `inline-translate-rewrite-language' (English by default).
       (inline-translate--rewrite-region beg end
                                         inline-translate-rewrite-language))))
 ;;;###autoload
-(defun inline-translate-rewrite-dwim ()
-  "Rewrite the active region, or the current paragraph if no region is active."
-  (interactive)
+(defun inline-translate-rewrite-dwim-to (language)
+  "Rewrite the active region (or current paragraph) to LANGUAGE.
+Interactively, prompt for the target language."
+  (interactive
+   (list (read-string "Translate to: "
+                      inline-translate-rewrite-language)))
   (if (use-region-p)
-      (inline-translate-rewrite-region (region-beginning) (region-end))
-    (inline-translate-rewrite-paragraph)))
+      (inline-translate--rewrite-region
+       (region-beginning) (region-end) language)
+    (save-excursion
+      (let (beg end)
+        (backward-paragraph)
+        (skip-chars-forward " \t\n")
+        (setq beg (point))
+        (forward-paragraph)
+        (skip-chars-backward " \t\n")
+        (setq end (point))
+        (inline-translate--rewrite-region beg end language)))))
 
 (provide 'inline-translate)
 ;;; inline-translate.el ends here

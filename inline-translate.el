@@ -80,11 +80,12 @@ Defaults to reading the ANTHROPIC_API_KEY environment variable."
 (defun inline-translate--make-overlay (beg end translation)
   "Create an overlay between beg and end displaying translation below the line."
   (let* ((ov (make-overlay beg end))
-         ;; Align the overlay with the indentation of the source line.
          (indent (save-excursion
                    (goto-char beg)
                    (current-indentation)))
-         (formatted (inline-translate--format-for-overlay translation indent))
+         (collapse (apply #'derived-mode-p
+                          inline-translate-collapse-line-breaks-modes))
+         (formatted (inline-translate--format-for-overlay translation indent collapse))
          (display-text
           (propertize (concat formatted "\n") 'face 'inline-translate-face)))
     (overlay-put ov 'inline-translate t)
@@ -93,32 +94,47 @@ Defaults to reading the ANTHROPIC_API_KEY environment variable."
     (push ov inline-translate--overlays)
     ov))
 
-(defun inline-translate--format-for-overlay (translation indent)
+(defun inline-translate--format-for-overlay (translation indent &optional collapse)
   "Format TRANSLATION for overlay display, prefixing each line with INDENT spaces.
-Wraps lines exceeding 80 columns."
+When COLLAPSE is non-nil, intra-paragraph line breaks are collapsed and
+each paragraph is re-wrapped at 80 columns minus INDENT. This is the
+right choice for man pages and similar fixed-column text.
+When COLLAPSE is nil, line breaks are preserved as-is and only over-long
+lines get wrapped. This preserves markdown lists and structured text."
   (let* ((prefix (make-string indent ?\s))
-         (effective-width (max 40 (- 80 indent)))
-         (lines (split-string translation "\n")))
-    (mapconcat
-     (lambda (line)
-       (if (> (length line) effective-width)
-           (with-temp-buffer
-             (insert line)
-             (let ((fill-column effective-width))
-               (fill-region (point-min) (point-max)))
-             (mapconcat (lambda (l) (concat prefix l))
-                        (split-string (buffer-string) "\n" t)
-                        "\n"))
-         (concat prefix line)))
-     lines "\n")))
-
-(defun inline-translate-clear-all ()
-  "Remove every translation overlay from the current buffer."
-  (interactive)
-  (dolist (ov inline-translate--overlays)
-    (when (overlayp ov) (delete-overlay ov)))
-  (setq inline-translate--overlays nil)
-  (message "inline-translate: overlays cleared."))
+         (effective-width (max 40 (- 80 indent))))
+    (if collapse
+        ;; Man-page mode: rejoin and rewrap by paragraph.
+        (let ((paragraphs (split-string translation "\n[ \t]*\n" t)))
+          (mapconcat
+           (lambda (paragraph)
+             (with-temp-buffer
+               (insert (replace-regexp-in-string
+                        "[ \t]*\n[ \t]*" " "
+                        (string-trim paragraph)))
+               (let ((fill-column effective-width))
+                 (fill-region (point-min) (point-max)))
+               (mapconcat (lambda (l) (concat prefix l))
+                          (split-string (buffer-string) "\n" t)
+                          "\n")))
+           paragraphs
+           (concat "\n" prefix "\n")))
+      ;; Structured-text mode: preserve every line break.
+      (let* ((strip-re (format "\\`[ \t]\\{0,%d\\}" indent))
+             (lines (split-string translation "\n")))
+        (mapconcat
+         (lambda (line)
+           (let ((line (replace-regexp-in-string strip-re "" line)))
+             (if (> (length line) effective-width)
+                 (with-temp-buffer
+                   (insert line)
+                   (let ((fill-column effective-width))
+                     (fill-region (point-min) (point-max)))
+                   (mapconcat (lambda (l) (concat prefix l))
+                              (split-string (buffer-string) "\n" t)
+                              "\n"))
+               (concat prefix line))))
+         lines "\n")))))
 
 (defun inline-translate-clear-at-point ()
   "Remove the translation overlay at point, if any."
@@ -259,6 +275,16 @@ Wraps lines exceeding 80 columns."
 (defcustom inline-translate-rewrite-language "English"
   "Target language used by the in-place rewrite commands."
   :type 'string
+  :group 'inline-translate)
+
+(defcustom inline-translate-collapse-line-breaks-modes
+  '(Man-mode woman-mode Info-mode help-mode)
+  "Major modes where the source uses arbitrary line wrapping.
+In these modes, intra-paragraph line breaks in the translation are
+collapsed and the text is re-wrapped to fit the overlay width.
+In all other modes, line breaks are preserved verbatim, which keeps
+markdown lists, code blocks, and similar structures intact."
+  :type '(repeat symbol)
   :group 'inline-translate)
 
 (defun inline-translate--rewrite-region (beg end target-language)

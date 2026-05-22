@@ -80,32 +80,37 @@ Defaults to reading the ANTHROPIC_API_KEY environment variable."
 (defun inline-translate--make-overlay (beg end translation)
   "Create an overlay between beg and end displaying translation below the line."
   (let* ((ov (make-overlay beg end))
-         ;; Compute the indentation of the source line so the translation
-         ;; lines up nicely underneath it.
+         ;; Align the overlay with the indentation of the source line.
          (indent (save-excursion
                    (goto-char beg)
                    (current-indentation)))
-         (prefix (make-string indent ?\s))
-         ;; Wrap the text so it does not stretch into a single huge line.
-         (wrapped (inline-translate--wrap-text translation 80 prefix))
+         (formatted (inline-translate--format-for-overlay translation indent))
          (display-text
-          (concat ""
-                  (propertize (concat prefix wrapped "\n")
-                              'face 'inline-translate-face))))
+          (propertize (concat formatted "\n") 'face 'inline-translate-face)))
     (overlay-put ov 'inline-translate t)
     (overlay-put ov 'after-string display-text)
     (overlay-put ov 'help-echo (format "Translation: %s" translation))
     (push ov inline-translate--overlays)
     ov))
 
-(defun inline-translate--wrap-text (text width prefix)
-  "Wrap text into lines of up to width columns, prefixing each new line with prefix."
-  (with-temp-buffer
-    (insert text)
-    (let ((fill-column width)
-          (fill-prefix prefix))
-      (fill-region (point-min) (point-max)))
-    (buffer-string)))
+(defun inline-translate--format-for-overlay (translation indent)
+  "Format TRANSLATION for overlay display, prefixing each line with INDENT spaces.
+Wraps lines exceeding 80 columns."
+  (let* ((prefix (make-string indent ?\s))
+         (effective-width (max 40 (- 80 indent)))
+         (lines (split-string translation "\n")))
+    (mapconcat
+     (lambda (line)
+       (if (> (length line) effective-width)
+           (with-temp-buffer
+             (insert line)
+             (let ((fill-column effective-width))
+               (fill-region (point-min) (point-max)))
+             (mapconcat (lambda (l) (concat prefix l))
+                        (split-string (buffer-string) "\n" t)
+                        "\n"))
+         (concat prefix line)))
+     lines "\n")))
 
 (defun inline-translate-clear-all ()
   "Remove every translation overlay from the current buffer."
@@ -127,7 +132,8 @@ Defaults to reading the ANTHROPIC_API_KEY environment variable."
 (defun inline-translate--build-prompt (text)
   "Build the translation prompt for text."
   (format
-   "Translate the following text to %s. Output ONLY the translation, with no preamble, no quotes, no explanations.\n\nText:\n%s"
+   "Translate the following text to %s. Output ONLY the translation, with no preamble, no quotes, no explanations. Preserve the exact formatting of the original text: keep the same line breaks, indentation, paragraph structure, emojis, and special characters — produce a structural copy of the original, but translated into %s.\n\nText:\n%s"
+   inline-translate-target-language
    inline-translate-target-language
    text))
 
